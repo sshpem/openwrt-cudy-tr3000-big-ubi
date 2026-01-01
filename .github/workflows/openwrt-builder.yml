@@ -100,6 +100,14 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
+    - name: Set ubi size
+      run: |
+        case "$UBI_SIZE" in
+          "112M") sed -i 's/reg = <0x5c0000 0x4000000>;/reg = <0x5c0000 0x7000000>;/g' target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1.dts ;;
+          "122M") sed -i 's/reg = <0x5c0000 0x4000000>;/reg = <0x5c0000 0x7a40000>;/g' target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1.dts ;;
+          *) echo "Unknown bui size: $UBI_SIZE" >&2; exit 1 ;;
+        esac
+
     - name: Download package
       id: package
       run: |
