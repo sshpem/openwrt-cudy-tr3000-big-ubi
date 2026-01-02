@@ -1,13 +1,5 @@
 #
-# https://github.com/P3TERX/Actions-OpenWrt
-#
-# File: .github/workflows/openwrt-bulder.yml
-# Description: Build OpenWrt using GitHub Actions
-#
-# Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
+# OpenWrt Builder (triggered by repository_dispatch)
 #
 
 name: OpenWrt Builder Cudy tr3000 big ubi
@@ -18,17 +10,22 @@ on:
   workflow_dispatch:
     inputs:
       ubi:
-        description: 'ubi size'
+        description: "ubi size"
         required: true
         type: choice
         default: '112M'
         options:
           - '112M'
           - '122M'
+      commit:
+        description: "OpenWrt release tag (e.g. v24.10.5)"
+        required: true
+        type: string
 
 env:
-  UBI_SIZE: ${{ github.event.inputs.ubi || github.event.client_payload.ubi }}
+  UBI_SIZE: ${{ github.event.client_payload.ubi || github.event.inputs.ubi }}
   REPO_URL: https://git.openwrt.org/openwrt/openwrt.git
+  REPO_COMMIT: ${{ github.event.client_payload.commit || github.event.inputs.commit }}
   REPO_BRANCH: v24.10.5
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
@@ -65,7 +62,7 @@ jobs:
       working-directory: /workdir
       run: |
         df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        git clone $REPO_URL -b $REPO_COMMIT --depth 1 openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: Dependency kernel
@@ -86,11 +83,11 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
-    - name: Update feeds
-      run: cd openwrt && ./scripts/feeds update -a
-
-    - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
+    - name: Update & Install feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
     - name: Load custom configuration
       run: |
@@ -135,7 +132,7 @@ jobs:
       run: df -hT
 
     - name: Upload bin directory
-      uses: actions/upload-artifact@main
+      uses: actions/upload-artifact@v4
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
         name: OpenWrt_bin_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
@@ -150,39 +147,43 @@ jobs:
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         for f in openwrt*.{bin,manifest}; do
-          #mv "$f" "openwrt-${{ env.REPO_BRANCH }}${f#openwrt}"
-          mv "$f" "$(echo "openwrt-${{ env.REPO_BRANCH }}${f#openwrt}" | sed "s/${{ env.DEVICE_NAME }}/${{ env.DEVICE_NAME }}-32M/")"
+          mv "$f" "$(echo "openwrt-${{ env.REPO_COMMIT }}${f#openwrt}" | sed "s/${{ env.DEVICE_NAME }}/${{ env.DEVICE_NAME }}-${{ env.UBI_SIZE }}-ubi/")"
         done
+        sha256sum openwrt*${{ env.DEVICE_NAME }}*squashfs-sysupgrade.bin > sha256sums
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware directory
-      uses: actions/upload-artifact@main
+      uses: actions/upload-artifact@v4
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: OpenWrt_firmware$_{{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
+        name: OpenWrt_firmware_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
+        path: |
+          ${{ env.FIRMWARE }}/*.bin
+          ${{ env.FIRMWARE }}/sha256sums
 
     - name: Generate release tag
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "release_tag=${{ env.REPO_BRANCH }}_${{ env.DEVICE_NAME }}-32M_$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        echo "release_tag=${{ env.REPO_COMMIT }}_${{ env.DEVICE_NAME }}-${{ env.UBI_SIZE }}-ubi_$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
         #[ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
-      uses: softprops/action-gh-release@master
+      uses: softprops/action-gh-release@v2
       if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
-        files: ${{ env.FIRMWARE }}/*
+        files: |
+          ${{ env.FIRMWARE }}/openwrt*${{ env.DEVICE_NAME }}*squashfs-sysupgrade.bin
+          ${{ env.FIRMWARE }}/sha256sums
 
     - name: Delete workflow runs
-      uses: Mattraks/delete-workflow-runs@main
+      uses: Mattraks/delete-workflow-runs@v2
       with:
         retain_days: 0
         keep_minimum_runs: 6
